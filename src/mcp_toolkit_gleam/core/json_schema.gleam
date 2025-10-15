@@ -284,7 +284,10 @@ fn decode_definitions(
 }
 
 fn decode_schema(data: Dynamic) -> Result(Schema, List(decode.DecodeError)) {
-  use data <- result.try(decode.run(data, decode.dict(decode.string, decode.dynamic)))
+  use data <- result.try(decode.run(
+    data,
+    decode.dict(decode.string, decode.dynamic),
+  ))
   let decoder =
     key_decoder(data, "enum", decode_enum)
     |> result.lazy_or(fn() { key_decoder(data, "$ref", decode_ref) })
@@ -364,7 +367,8 @@ pub fn decode_object_schema(
 
   let required_field = fn(data: Dict(String, Dynamic)) {
     case dict.get(data, "required") {
-      Ok(d) -> decode.run(d, decode.list(decode.string)) |> push_path("required")
+      Ok(d) ->
+        decode.run(d, decode.list(decode.string)) |> push_path("required")
       Error(_) -> Ok([])
     }
   }
@@ -372,8 +376,16 @@ pub fn decode_object_schema(
   use properties <- result.try(properties_field("properties", data))
   use required <- result.try(required_field(data))
   use additional_properties <- result.try(additional_properties(data))
-  use pattern_properties <- result.try(properties_field("patternProperties", data))
-  Ok(ObjectSchema(properties:, required:, additional_properties:, pattern_properties:))
+  use pattern_properties <- result.try(properties_field(
+    "patternProperties",
+    data,
+  ))
+  Ok(ObjectSchema(
+    properties:,
+    required:,
+    additional_properties:,
+    pattern_properties:,
+  ))
 }
 
 fn decode_object_as_list(
@@ -544,9 +556,10 @@ fn push_path(
   result: Result(t, List(decode.DecodeError)),
   segment: String,
 ) -> Result(t, List(decode.DecodeError)) {
-  result.map_error(result, list.map(_, fn(e) {
-    decode.DecodeError(..e, path: [segment, ..e.path])
-  }))
+  result.map_error(
+    result,
+    list.map(_, fn(e) { decode.DecodeError(..e, path: [segment, ..e.path]) }),
+  )
 }
 
 fn get_metadata(
@@ -593,14 +606,11 @@ fn get_nullable(
 
 fn metadata_value_to_json(data: Dynamic) -> Json {
   let decoder =
-    decode.one_of(
-      decode.string |> decode.map(json.string),
-      [
-        decode.int |> decode.map(json.int),
-        decode.float |> decode.map(json.float),
-        decode.bool |> decode.map(json.bool),
-      ],
-    )
+    decode.one_of(decode.string |> decode.map(json.string), [
+      decode.int |> decode.map(json.int),
+      decode.float |> decode.map(json.float),
+      decode.bool |> decode.map(json.bool),
+    ])
   case decode.run(data, decoder) {
     Ok(data) -> data
     Error(_) -> json.string(string.inspect(data))

@@ -12,7 +12,7 @@ Production-ready Model Context Protocol (MCP) Toolkit implementation in Gleam wi
 
 ### Production-Ready Architecture
 - **Latest MCP Specification**: Implements MCP 2025-06-18 with backward compatibility
-- **Comprehensive Testing**: Full test coverage with birdie snapshots and gleunit
+- **Comprehensive Testing**: Full test coverage with birdie snapshots and gleunit (71+ tests)
 - **Type Safety**: Strong typing throughout with comprehensive error handling
 - **Modular Design**: Clean separation between core protocol and transport layers
 - **Production-Ready**: Comprehensive error handling and logging throughout
@@ -28,8 +28,8 @@ Production-ready Model Context Protocol (MCP) Toolkit implementation in Gleam wi
 
 ### Prerequisites
 
-- **Erlang/OTP 28+**: For optimal performance and compatibility
-- **Gleam 1.11.1+**: Latest Gleam compiler with modern language features
+- **Erlang/OTP 27+**: Required for gleam_json 3.x and latest features
+- **Gleam 1.12.0+**: Latest Gleam compiler with modern language features
 - **Git**: For version control and dependency management
 
 ### Installation
@@ -109,7 +109,7 @@ test/
 
 ## 🧪 Testing
 
-The project includes comprehensive testing with 100% coverage:
+The project includes comprehensive testing with birdie snapshots and gleunit:
 
 ```bash
 # Run all tests
@@ -118,10 +118,9 @@ gleam test
 # Run specific test modules
 gleam test --module mcp_toolkit_gleam/core/protocol_test
 gleam test --module mcp_toolkit_gleam/integration/full_test
-
-# Generate test coverage report
-gleam test --coverage
 ```
+
+Note: Test coverage reporting requires additional tooling. The project currently has 71 comprehensive tests covering core protocol, server, transport, and integration functionality.
 
 ### Test Categories
 - **Unit Tests**: Individual component testing with gleunit
@@ -148,19 +147,16 @@ gleam test --coverage
 
 ## 🔧 Dependencies
 
-### Dependencies
+### Core Dependencies
 ```toml
 # Core protocol dependencies
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"
 gleam_http = ">= 4.0.0 and < 5.0.0"
-gleam_json = ">= 2.3.0 and < 3.0.0"
-jsonrpc = ">= 1.0.0 and < 2.0.0"
+gleam_json = ">= 3.0.0 and < 4.0.0"  # Requires Erlang/OTP 27+
 justin = ">= 1.0.1 and < 2.0.0"
-gleam_erlang = ">= 0.34.0 and < 1.0.0"
+gleam_erlang = ">= 1.0.0 and < 2.0.0"
 
-# HTTP/WebSocket transport dependencies
-mist = ">= 3.0.0 and < 4.0.0"
-wisp = ">= 0.17.0 and < 1.0.0"
+# Note: jsonrpc is vendored internally for compatibility with gleam_json 3.x
 ```
 
 ### Development Dependencies
@@ -226,7 +222,7 @@ gleam test
 
 ### Code Quality
 - All code must pass `gleam format`
-- 100% test coverage required
+- Comprehensive test coverage (71+ tests)
 - Comprehensive documentation for public APIs
 - Security review for transport implementations
 
