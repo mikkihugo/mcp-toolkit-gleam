@@ -3,7 +3,7 @@ import gleam/dynamic/decode.{type Decoder, type Dynamic}
 import gleam/json
 import gleam/list
 import gleam/result
-import jsonrpc
+import mcp_toolkit_gleam/core/jsonrpc
 import mcp_toolkit_gleam/core/method
 
 import gleam/option.{type Option, None, Some}

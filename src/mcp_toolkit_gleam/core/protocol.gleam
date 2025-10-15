@@ -4,7 +4,7 @@ import gleam/dynamic/decode.{type Decoder}
 import gleam/function
 import gleam/json.{type Json}
 import gleam/option.{type Option}
-import jsonrpc
+import mcp_toolkit_gleam/core/jsonrpc
 import mcp_toolkit_gleam/core/json_schema
 
 // 2025-06-18 (Latest MCP Specification)
@@ -2034,8 +2034,12 @@ pub fn tool_input_schema_decoder() -> Decoder(ToolInputSchema) {
   decode.new_primitive_decoder("ToolInputSchema", fn(data) {
     case decode.run(data, decode.at(["type"], decode.string)) {
       Ok("object") ->
-        case json_schema.decode_object_schema(data) {
-          Ok(schema) -> Ok(ToolInputSchema(schema))
+        case decode.run(data, decode.dict(decode.string, decode.dynamic)) {
+          Ok(dict_data) ->
+            case json_schema.decode_object_schema(dict_data) {
+              Ok(schema) -> Ok(ToolInputSchema(schema))
+              gleam.Error(_) -> gleam.Error(default)
+            }
           gleam.Error(_) -> gleam.Error(default)
         }
       _ -> gleam.Error(default)

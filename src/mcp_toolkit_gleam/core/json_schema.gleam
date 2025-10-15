@@ -5,6 +5,7 @@
 import gleam/bool
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -224,31 +225,66 @@ fn type_to_json(t: Type) -> Json {
   })
 }
 
-pub fn decoder(data: Dynamic) -> Result(RootSchema, List(dynamic.DecodeError)) {
-  dynamic.decode2(RootSchema, decode_definitions, fn(_) { Ok(Empty([])) })(data)
+pub fn decoder(data: Dynamic) -> Result(RootSchema, List(decode.DecodeError)) {
+  use definitions <- result.try(decode_definitions(data))
+  use schema <- result.try(Ok(Empty([])))
+  Ok(RootSchema(definitions:, schema:))
 }
 
 fn decode_definitions(
   data: Dynamic,
-) -> Result(List(#(String, Schema)), List(dynamic.DecodeError)) {
+) -> Result(List(#(String, Schema)), List(decode.DecodeError)) {
   let defs_decoder = fn(data) {
-    use defs <- result.try(dynamic.field("$defs", dynamic.dynamic)(data))
-    dynamic.dict(dynamic.string, decode_schema)(defs)
-    |> result.map(dict.to_list)
+    use defs <- result.try(
+      decode.run(data, decode.at(["$defs"], decode.dynamic))
+      |> result.map_error(fn(_) { [] }),
+    )
+    // Manually decode the dict
+    case decode.run(defs, decode.dict(decode.string, decode.dynamic)) {
+      Ok(dict_data) -> {
+        dict_data
+        |> dict.to_list
+        |> list.try_map(fn(pair) {
+          let #(key, value) = pair
+          case decode_schema(value) {
+            Ok(schema) -> Ok(#(key, schema))
+            Error(e) -> Error(e)
+          }
+        })
+      }
+      Error(e) -> Error(e)
+    }
   }
 
   let definitions_decoder = fn(data) {
-    use defs <- result.try(dynamic.field("definitions", dynamic.dynamic)(data))
-    dynamic.dict(dynamic.string, decode_schema)(defs)
-    |> result.map(dict.to_list)
+    use defs <- result.try(
+      decode.run(data, decode.at(["definitions"], decode.dynamic))
+      |> result.map_error(fn(_) { [] }),
+    )
+    // Manually decode the dict
+    case decode.run(defs, decode.dict(decode.string, decode.dynamic)) {
+      Ok(dict_data) -> {
+        dict_data
+        |> dict.to_list
+        |> list.try_map(fn(pair) {
+          let #(key, value) = pair
+          case decode_schema(value) {
+            Ok(schema) -> Ok(#(key, schema))
+            Error(e) -> Error(e)
+          }
+        })
+      }
+      Error(e) -> Error(e)
+    }
   }
 
   defs_decoder(data)
   |> result.lazy_or(fn() { definitions_decoder(data) })
+  |> result.lazy_or(fn() { Ok([]) })
 }
 
-fn decode_schema(data: Dynamic) -> Result(Schema, List(dynamic.DecodeError)) {
-  use data <- result.try(dynamic.dict(dynamic.string, dynamic.dynamic)(data))
+fn decode_schema(data: Dynamic) -> Result(Schema, List(decode.DecodeError)) {
+  use data <- result.try(decode.run(data, decode.dict(decode.string, decode.dynamic)))
   let decoder =
     key_decoder(data, "enum", decode_enum)
     |> result.lazy_or(fn() { key_decoder(data, "$ref", decode_ref) })
@@ -268,8 +304,8 @@ fn key_decoder(
   dict: Dict(String, Dynamic),
   key: String,
   constructor: fn(Dynamic, Dict(String, Dynamic)) ->
-    Result(t, List(dynamic.DecodeError)),
-) -> Result(fn() -> Result(t, List(dynamic.DecodeError)), Nil) {
+    Result(t, List(decode.DecodeError)),
+) -> Result(fn() -> Result(t, List(decode.DecodeError)), Nil) {
   case dict.get(dict, key) {
     Ok(value) -> Ok(fn() { constructor(value, dict) })
     Error(e) -> Error(e)
@@ -279,28 +315,44 @@ fn key_decoder(
 fn decode_object(
   _props: Dynamic,
   data: Dict(String, Dynamic),
-) -> Result(Schema, List(dynamic.DecodeError)) {
+) -> Result(Schema, List(decode.DecodeError)) {
   use nullable <- result.try(get_nullable(data))
   use metadata <- result.try(get_metadata(data))
-  dynamic.from(data)
-  |> decode_object_schema
+  decode_object_schema(data)
   |> result.map(Object(nullable, metadata, _))
 }
 
 pub fn decode_object_schema(
-  data: Dynamic,
-) -> Result(ObjectSchema, List(dynamic.DecodeError)) {
-  let properties_field = fn(name, data) {
-    case dynamic.field(name, dynamic.dynamic)(data) {
-      Ok(d) -> decode_object_as_list(d, decode_schema) |> push_path(name)
+  data: Dict(String, Dynamic),
+) -> Result(ObjectSchema, List(decode.DecodeError)) {
+  let properties_field = fn(name, data: Dict(String, Dynamic)) {
+    case dict.get(data, name) {
+      Ok(d) -> {
+        // Manually decode the dict
+        case decode.run(d, decode.dict(decode.string, decode.dynamic)) {
+          Ok(dict_data) -> {
+            dict_data
+            |> dict.to_list
+            |> list.try_map(fn(pair) {
+              let #(key, value) = pair
+              case decode_schema(value) {
+                Ok(schema) -> Ok(#(key, schema))
+                Error(e) -> Error(e)
+              }
+            })
+            |> push_path(name)
+          }
+          Error(e) -> Error(e) |> push_path(name)
+        }
+      }
       Error(_) -> Ok([])
     }
   }
 
-  let additional_properties = fn(data) {
-    case dynamic.field("additionalProperties", dynamic.dynamic)(data) {
+  let additional_properties = fn(data: Dict(String, Dynamic)) {
+    case dict.get(data, "additionalProperties") {
       Ok(d) ->
-        case dynamic.bool(d) {
+        case decode.run(d, decode.bool) {
           Ok(True) -> Ok(Some(Empty([])))
           Ok(False) -> Ok(None)
           Error(_) -> decode_schema(d) |> result.map(Some)
@@ -310,34 +362,32 @@ pub fn decode_object_schema(
     }
   }
 
-  let required_field = fn(data) {
-    case dynamic.field("required", dynamic.dynamic)(data) {
-      Ok(d) -> dynamic.list(dynamic.string)(d) |> push_path("required")
+  let required_field = fn(data: Dict(String, Dynamic)) {
+    case dict.get(data, "required") {
+      Ok(d) -> decode.run(d, decode.list(decode.string)) |> push_path("required")
       Error(_) -> Ok([])
     }
   }
 
-  dynamic.decode4(
-    ObjectSchema,
-    properties_field("properties", _),
-    required_field,
-    additional_properties,
-    properties_field("patternProperties", _),
-  )(data)
+  use properties <- result.try(properties_field("properties", data))
+  use required <- result.try(required_field(data))
+  use additional_properties <- result.try(additional_properties(data))
+  use pattern_properties <- result.try(properties_field("patternProperties", data))
+  Ok(ObjectSchema(properties:, required:, additional_properties:, pattern_properties:))
 }
 
 fn decode_object_as_list(
   data: Dynamic,
-  inner: dynamic.Decoder(t),
-) -> Result(List(#(String, t)), List(dynamic.DecodeError)) {
-  dynamic.dict(dynamic.string, inner)(data)
+  inner: decode.Decoder(t),
+) -> Result(List(#(String, t)), List(decode.DecodeError)) {
+  decode.run(data, decode.dict(decode.string, inner))
   |> result.map(dict.to_list)
 }
 
 fn decode_array(
   items: Dynamic,
   data: Dict(String, Dynamic),
-) -> Result(Schema, List(dynamic.DecodeError)) {
+) -> Result(Schema, List(decode.DecodeError)) {
   use nullable <- result.try(get_nullable(data))
   use metadata <- result.try(get_metadata(data))
   decode_schema(items)
@@ -348,11 +398,20 @@ fn decode_array(
 fn decode_one_of(
   schemas: Dynamic,
   data: Dict(String, Dynamic),
-) -> Result(Schema, List(dynamic.DecodeError)) {
+) -> Result(Schema, List(decode.DecodeError)) {
   use nullable <- result.try(get_nullable(data))
   use metadata <- result.try(get_metadata(data))
   use schemas <- result.try(
-    dynamic.list(decode_schema)(schemas)
+    {
+      // Manually decode the list of schemas
+      case decode.run(schemas, decode.list(decode.dynamic)) {
+        Ok(schema_list) -> {
+          schema_list
+          |> list.try_map(decode_schema)
+        }
+        Error(e) -> Error(e)
+      }
+    }
     |> push_path("oneOf"),
   )
   Ok(OneOf(nullable, metadata, schemas))
@@ -361,11 +420,20 @@ fn decode_one_of(
 fn decode_all_of(
   schemas: Dynamic,
   data: Dict(String, Dynamic),
-) -> Result(Schema, List(dynamic.DecodeError)) {
+) -> Result(Schema, List(decode.DecodeError)) {
   use nullable <- result.try(get_nullable(data))
   use metadata <- result.try(get_metadata(data))
   use schemas <- result.try(
-    dynamic.list(decode_schema)(schemas)
+    {
+      // Manually decode the list of schemas
+      case decode.run(schemas, decode.list(decode.dynamic)) {
+        Ok(schema_list) -> {
+          schema_list
+          |> list.try_map(decode_schema)
+        }
+        Error(e) -> Error(e)
+      }
+    }
     |> push_path("allOf"),
   )
   Ok(AllOf(nullable, metadata, schemas))
@@ -374,11 +442,20 @@ fn decode_all_of(
 fn decode_any_of(
   schemas: Dynamic,
   data: Dict(String, Dynamic),
-) -> Result(Schema, List(dynamic.DecodeError)) {
+) -> Result(Schema, List(decode.DecodeError)) {
   use nullable <- result.try(get_nullable(data))
   use metadata <- result.try(get_metadata(data))
   use schemas <- result.try(
-    dynamic.list(decode_schema)(schemas)
+    {
+      // Manually decode the list of schemas
+      case decode.run(schemas, decode.list(decode.dynamic)) {
+        Ok(schema_list) -> {
+          schema_list
+          |> list.try_map(decode_schema)
+        }
+        Error(e) -> Error(e)
+      }
+    }
     |> push_path("anyOf"),
   )
   Ok(AnyOf(nullable, metadata, schemas))
@@ -387,7 +464,7 @@ fn decode_any_of(
 fn decode_not(
   schema: Dynamic,
   data: Dict(String, Dynamic),
-) -> Result(Schema, List(dynamic.DecodeError)) {
+) -> Result(Schema, List(decode.DecodeError)) {
   use nullable <- result.try(get_nullable(data))
   use metadata <- result.try(get_metadata(data))
   use schema <- result.try(
@@ -400,11 +477,11 @@ fn decode_not(
 fn decode_type(
   type_: Dynamic,
   data: Dict(String, Dynamic),
-) -> Result(Schema, List(dynamic.DecodeError)) {
+) -> Result(Schema, List(decode.DecodeError)) {
   use type_ <- result.try(
-    dynamic.string(type_)
+    decode.run(type_, decode.string)
     |> result.lazy_or(fn() {
-      dynamic.list(dynamic.string)(type_)
+      decode.run(type_, decode.list(decode.string))
       |> result.map(fn(types) {
         case types {
           [t] -> t
@@ -426,17 +503,17 @@ fn decode_type(
     "array" -> Ok(Type(nullable, metadata, ArrayType))
     "object" -> Ok(Type(nullable, metadata, ObjectType))
     "null" -> Ok(Type(nullable, metadata, Null))
-    _ -> Error([dynamic.DecodeError("Type", "String", ["type"])])
+    _ -> Error([decode.DecodeError("Type", "String", ["type"])])
   }
 }
 
 fn decode_enum(
   variants: Dynamic,
   data: Dict(String, Dynamic),
-) -> Result(Schema, List(dynamic.DecodeError)) {
+) -> Result(Schema, List(decode.DecodeError)) {
   use nullable <- result.try(get_nullable(data))
   use metadata <- result.try(get_metadata(data))
-  dynamic.list(dynamic.string)(variants)
+  decode.run(variants, decode.list(decode.string))
   |> push_path("enum")
   |> result.map(Enum(nullable, metadata, _))
 }
@@ -444,37 +521,37 @@ fn decode_enum(
 fn decode_ref(
   ref: Dynamic,
   data: Dict(String, Dynamic),
-) -> Result(Schema, List(dynamic.DecodeError)) {
+) -> Result(Schema, List(decode.DecodeError)) {
   use nullable <- result.try(get_nullable(data))
   use metadata <- result.try(get_metadata(data))
-  dynamic.string(ref)
+  decode.run(ref, decode.string)
   |> push_path("$ref")
   |> result.map(Ref(nullable, metadata, _))
 }
 
 fn decode_empty(
   data: Dict(String, Dynamic),
-) -> Result(Schema, List(dynamic.DecodeError)) {
+) -> Result(Schema, List(decode.DecodeError)) {
   use metadata <- result.try(get_metadata(data))
   Ok(Empty(metadata:))
   // case dict.size(data) {
   //   0 -> Ok(Empty(metadata:))
-  //   _ -> Error([dynamic.DecodeError("Schema", "Dict", [])])
+  //   _ -> Error([decode.DecodeError("Schema", "Dict", [])])
   // }
 }
 
 fn push_path(
-  result: Result(t, List(dynamic.DecodeError)),
+  result: Result(t, List(decode.DecodeError)),
   segment: String,
-) -> Result(t, List(dynamic.DecodeError)) {
+) -> Result(t, List(decode.DecodeError)) {
   result.map_error(result, list.map(_, fn(e) {
-    dynamic.DecodeError(..e, path: [segment, ..e.path])
+    decode.DecodeError(..e, path: [segment, ..e.path])
   }))
 }
 
 fn get_metadata(
   data: Dict(String, Dynamic),
-) -> Result(List(#(String, Dynamic)), List(dynamic.DecodeError)) {
+) -> Result(List(#(String, Dynamic)), List(decode.DecodeError)) {
   let ignored_keys =
     set.from_list([
       "type", "enum", "$ref", "items", "properties", "required",
@@ -495,15 +572,15 @@ fn get_metadata(
 
 fn get_nullable(
   data: Dict(String, Dynamic),
-) -> Result(Bool, List(dynamic.DecodeError)) {
+) -> Result(Bool, List(decode.DecodeError)) {
   // Check for explicit "nullable" property
   case dict.get(data, "nullable") {
-    Ok(data) -> dynamic.bool(data) |> push_path("nullable")
+    Ok(data) -> decode.run(data, decode.bool) |> push_path("nullable")
     Error(_) -> {
       // Check if type array includes "null"
       case dict.get(data, "type") {
         Ok(type_value) -> {
-          case dynamic.list(dynamic.string)(type_value) {
+          case decode.run(type_value, decode.list(decode.string)) {
             Ok(types) -> Ok(list.contains(types, "null"))
             Error(_) -> Ok(False)
           }
@@ -516,13 +593,15 @@ fn get_nullable(
 
 fn metadata_value_to_json(data: Dynamic) -> Json {
   let decoder =
-    dynamic.any([
-      fn(a) { dynamic.string(a) |> result.map(json.string) },
-      fn(a) { dynamic.int(a) |> result.map(json.int) },
-      fn(a) { dynamic.float(a) |> result.map(json.float) },
-      fn(a) { dynamic.bool(a) |> result.map(json.bool) },
-    ])
-  case decoder(data) {
+    decode.one_of(
+      decode.string |> decode.map(json.string),
+      [
+        decode.int |> decode.map(json.int),
+        decode.float |> decode.map(json.float),
+        decode.bool |> decode.map(json.bool),
+      ],
+    )
+  case decode.run(data, decoder) {
     Ok(data) -> data
     Error(_) -> json.string(string.inspect(data))
   }
