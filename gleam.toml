@@ -9,10 +9,9 @@ repository = { type = "github", user = "mikkihugo", repo = "mcp_toolkit_gleam" }
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"
 gleam_http = ">= 4.0.0 and < 5.0.0"
-gleam_json = ">= 2.3.0 and < 3.0.0"
-jsonrpc = ">= 1.0.0 and < 2.0.0"
+gleam_json = ">= 3.0.0 and < 4.0.0"
 justin = ">= 1.0.1 and < 2.0.0"
-gleam_erlang = ">= 0.34.0 and < 1.0.0"
+gleam_erlang = ">= 1.0.0 and < 2.0.0"
 
 # HTTP/WebSocket dependencies for all transport functionality
 # mist = ">= 1.0.0 and < 3.0.0"
